@@ -91,24 +91,47 @@ func handleCommand(_chatId int64, command string) error {
 func handleMessage(message *tgbotapi.Message) {
 	user := message.From
 	text := message.Text
+	photo := message.Photo
+	var err error
 
 	if user == nil {
+		log.Println("User is nil, message rejected")
 		return
 	}
 
-	// Print to console
-	log.Printf("%s wrote %s", user.FirstName, text)
+	if text != "" {
+		// Print to console
+		log.Printf("Received message: %+v", text)
 
-	var err error
-	if strings.HasPrefix(text, "/") {
-		err = handleCommand(message.Chat.ID, text)
+		if strings.HasPrefix(text, "/") {
+			err = handleCommand(message.Chat.ID, text)
+		} else {
+			// This is equivalent to forwarding, without the sender's name
+			copyMsg := tgbotapi.NewCopyMessage(message.Chat.ID, message.Chat.ID, message.MessageID)
+			_, err = bot.CopyMessage(copyMsg)
+		}
+
+		if err != nil {
+			log.Printf("An error occured: %s", err.Error())
+		}
+	} else if len(photo) > 0 {
+		log.Println("Handling photo message")
+		// msg := tgbotapi.NewMessage(message.Chat.ID, "Success")
+		// msg.ReplyToMessageID = message.MessageID
+		// _, err = bot.Send(msg)
+
+		// if err != nil {
+		// 	log.Printf("An error occured: %s", err.Error())
+		// }
 	} else {
-		// This is equivalent to forwarding, without the sender's name
-		copyMsg := tgbotapi.NewCopyMessage(message.Chat.ID, message.Chat.ID, message.MessageID)
-		_, err = bot.CopyMessage(copyMsg)
+		log.Println("Unexpected message type, message rejected")
+		msg := tgbotapi.NewMessage(message.Chat.ID, "Unexpected message type, message rejected")
+		msg.ReplyToMessageID = message.MessageID
+		_, err = bot.Send(msg)
+
+		if err != nil {
+			log.Printf("An error occured: %s", err.Error())
+		}
 	}
 
-	if err != nil {
-		log.Printf("An error occured: %s", err.Error())
-	}
 }
