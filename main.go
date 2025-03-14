@@ -8,18 +8,29 @@ import (
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/hupe1980/go-huggingface"
 )
 
 var (
-	bot *tgbotapi.BotAPI
+	bot               *tgbotapi.BotAPI
+	api_key           string
+	huggingface_token string
 )
 
 func main() {
 	var err error
-	api_key, exists := os.LookupEnv("TELEGRAM_BOT_API_KEY")
+	var env_var_exists bool
 
-	if api_key == "" || !exists {
+	api_key, env_var_exists = os.LookupEnv("TELEGRAM_BOT_API_KEY")
+
+	if api_key == "" || !env_var_exists {
 		log.Panic("Missing or invalid TELEGRAM_BOT_API_KEY")
+	}
+
+	huggingface_token, env_var_exists = os.LookupEnv("HUGGINGFACEHUB_API_TOKEN")
+
+	if huggingface_token == "" || !env_var_exists {
+		log.Panic("Missing or invalid HUGGINGFACEHUB_API_TOKEN")
 	}
 
 	bot, err = tgbotapi.NewBotAPI(api_key)
@@ -88,6 +99,32 @@ func handleCommand(_chatId int64, command string) error {
 	return err
 }
 
+func handleWithLLM(text string) (string, error) {
+
+	ic := huggingface.NewInferenceClient(huggingface_token)
+
+	res, err := ic.Conversational(context.Background(), &huggingface.ConversationalRequest{
+		Inputs: huggingface.ConverstationalInputs{
+			// PastUserInputs: []string{
+			// 	"Which movie is the best ?",
+			// 	"Can you explain why ?",
+			// },
+			// GeneratedResponses: []string{
+			// 	"It's Die Hard for sure.",
+			// 	"It's the best movie ever.",
+			// },
+			Text: text,
+		},
+		Model: "google/gemma-2-2b-it",
+	})
+
+	if err != nil {
+		return "", err
+	}
+
+	return res.GeneratedText, nil
+}
+
 func handleMessage(message *tgbotapi.Message) {
 	user := message.From
 	text := message.Text
@@ -106,9 +143,28 @@ func handleMessage(message *tgbotapi.Message) {
 		if strings.HasPrefix(text, "/") {
 			err = handleCommand(message.Chat.ID, text)
 		} else {
-			// This is equivalent to forwarding, without the sender's name
-			copyMsg := tgbotapi.NewCopyMessage(message.Chat.ID, message.Chat.ID, message.MessageID)
-			_, err = bot.CopyMessage(copyMsg)
+			llm_response, err := handleWithLLM(text)
+			if err != nil {
+				log.Printf("[HuggingFace] Unexpected error: %s\n", err.Error())
+
+				msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry I could not handle your message, please try again later")
+				msg.ReplyToMessageID = message.MessageID
+				_, err = bot.Send(msg)
+
+				if err != nil {
+					log.Printf("[Telegram] Failed to send message: %s\n", err.Error())
+					return
+				}
+			}
+
+			msg := tgbotapi.NewMessage(message.Chat.ID, llm_response)
+			msg.ReplyToMessageID = message.MessageID
+			_, err = bot.Send(msg)
+
+			if err != nil {
+				log.Printf("[Telegram] Failed to send message: %s\n", err.Error())
+				return
+			}
 		}
 
 		if err != nil {
@@ -130,8 +186,7 @@ func handleMessage(message *tgbotapi.Message) {
 		_, err = bot.Send(msg)
 
 		if err != nil {
-			log.Printf("An error occured: %s", err.Error())
+			log.Printf("[Telegram] Failed to send message: %s\n", err.Error())
 		}
 	}
-
 }
