@@ -103,26 +103,37 @@ func handleWithLLM(text string) (string, error) {
 
 	ic := huggingface.NewInferenceClient(huggingface_token)
 
-	res, err := ic.Conversational(context.Background(), &huggingface.ConversationalRequest{
-		Inputs: huggingface.ConverstationalInputs{
-			// PastUserInputs: []string{
-			// 	"Which movie is the best ?",
-			// 	"Can you explain why ?",
-			// },
-			// GeneratedResponses: []string{
-			// 	"It's Die Hard for sure.",
-			// 	"It's the best movie ever.",
-			// },
-			Text: text,
+	// res, err := ic.Conversational(context.Background(), &huggingface.ConversationalRequest{
+	// 	Inputs: huggingface.ConverstationalInputs{
+	// 		// PastUserInputs: []string{
+	// 		// 	"Which movie is the best ?",
+	// 		// 	"Can you explain why ?",
+	// 		// },
+	// 		// GeneratedResponses: []string{
+	// 		// 	"It's Die Hard for sure.",
+	// 		// 	"It's the best movie ever.",
+	// 		// },
+	// 		Text: text,
+	// 	},
+	// 	Model: "google/gemma-2-2b-it",
+	// })
+
+	res, err := ic.Text2TextGeneration(context.Background(), &huggingface.Text2TextGenerationRequest{
+		Inputs: text,
+		Model:  "facebook/blenderbot-400M-distill",
+		Parameters: huggingface.Text2TextGenerationParameters{
+			// Prevent the model from generating very long responses
+			// MaxNewTokens: huggingface.PTR(100),
+			// Add some randomness to responses
+			Temperature: huggingface.PTR(0.7),
 		},
-		Model: "google/gemma-2-2b-it",
 	})
 
 	if err != nil {
 		return "", err
 	}
 
-	return res.GeneratedText, nil
+	return res[0].GeneratedText, nil
 }
 
 func handleMessage(message *tgbotapi.Message) {
