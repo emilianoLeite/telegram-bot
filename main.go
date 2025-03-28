@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
+	huggingface "github.com/emilianoleite/telegram-bot/go-huggingface"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"github.com/hupe1980/go-huggingface"
 )
 
 var (
