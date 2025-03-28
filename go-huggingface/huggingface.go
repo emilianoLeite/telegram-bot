@@ -1,4 +1,4 @@
-package huggingface
+package huggingface // Forked from github.com/hupe1980/go-huggingface
 
 import (
 	"bytes"
