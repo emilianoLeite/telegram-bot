@@ -3,37 +3,95 @@ package main
 import (
 	"bufio"
 	"context"
+	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
+	"regexp"
 	"strings"
 
-	huggingface "github.com/emilianoleite/telegram-bot/go-huggingface"
+	"github.com/emilianoleite/telegram-bot/adapters"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 var (
-	bot               *tgbotapi.BotAPI
-	api_key           string
-	huggingface_token string
+	bot                   *tgbotapi.BotAPI
+	telegram_api_key      string
+	huggingface_token     string
+	google_studio_api_key string
+	llm_adapter           adapters.LLMAdapter
+	adapter_type          adapters.AdapterType
 )
+
+func initializeLLMAdapter(adapterType adapters.AdapterType, model string) (adapters.LLMAdapter, error) {
+	var apiKey string
+	var env_var_exists bool
+
+	switch adapterType {
+	case adapters.HuggingFace:
+		apiKey, env_var_exists = os.LookupEnv("HUGGINGFACEHUB_API_TOKEN")
+
+		if apiKey == "" || !env_var_exists {
+			log.Panic("Missing or invalid HUGGINGFACEHUB_API_TOKEN")
+		}
+
+		if model == "" {
+			model = "facebook/blenderbot-400M-distill"
+		}
+
+		log.Printf("Initializing Hugging Face adapter with model: %s", model)
+	case adapters.GoogleStudio:
+		apiKey, env_var_exists = os.LookupEnv("GOOGLE_STUDIO_API_KEY")
+
+		if apiKey == "" || !env_var_exists {
+			log.Panic("Missing or invalid GOOGLE_STUDIO_API_KEY")
+		}
+
+		if model == "" {
+			model = "gemini-2.5-flash"
+		}
+		log.Printf("Initializing Google AI Studio adapter with model: %s", model)
+	default:
+		return nil, fmt.Errorf("unsupported adapter type: %s", adapterType)
+	}
+
+	return adapters.NewLLMAdapter(adapterType, apiKey, model)
+}
 
 func main() {
 	var err error
 	var env_var_exists bool
 
-	api_key, env_var_exists = os.LookupEnv("TELEGRAM_BOT_API_KEY")
+	telegram_api_key, env_var_exists = os.LookupEnv("TELEGRAM_BOT_API_KEY")
 
-	if api_key == "" || !env_var_exists {
+	if telegram_api_key == "" || !env_var_exists {
 		log.Panic("Missing or invalid TELEGRAM_BOT_API_KEY")
 	}
 
-	huggingface_token, env_var_exists = os.LookupEnv("HUGGINGFACEHUB_API_TOKEN")
+	google_studio_api_key, env_var_exists = os.LookupEnv("GOOGLE_STUDIO_API_KEY")
 
-	if huggingface_token == "" || !env_var_exists {
-		log.Panic("Missing or invalid HUGGINGFACEHUB_API_TOKEN")
+	if google_studio_api_key == "" || !env_var_exists {
+		log.Panic("Missing or invalid GOOGLE_STUDIO_API_KEY")
 	}
 
-	bot, err = tgbotapi.NewBotAPI(api_key)
+	// Get adapter type from environment variable, default to huggingface
+	adapter_type_str, env_var_exists := os.LookupEnv("LLM_ADAPTER_TYPE")
+
+	if !env_var_exists || adapter_type_str == "" {
+		adapter_type = adapters.HuggingFace
+		log.Println("LLM_ADAPTER_TYPE not set, defaulting to huggingface")
+	} else {
+		adapter_type = adapters.AdapterType(adapter_type_str)
+	}
+
+	llm_adapter, err = initializeLLMAdapter(adapter_type, "")
+
+	if err != nil {
+		log.Panicf("Failed to initialize LLM adapter: %v", err)
+	}
+
+	bot, err = tgbotapi.NewBotAPI(telegram_api_key)
 
 	if err != nil {
 		// Abort if something is wrong
@@ -82,7 +140,6 @@ func handleUpdate(update tgbotapi.Update) {
 	switch {
 	case update.Message != nil:
 		handleMessage(update.Message)
-		break
 	}
 }
 
@@ -93,47 +150,17 @@ func handleCommand(_chatId int64, command string) error {
 	switch command {
 	case "/start":
 		log.Println("/start command received")
-		break
 	}
 
 	return err
 }
 
 func handleWithLLM(text string) (string, error) {
-
-	ic := huggingface.NewInferenceClient(huggingface_token)
-
-	// res, err := ic.Conversational(context.Background(), &huggingface.ConversationalRequest{
-	// 	Inputs: huggingface.ConverstationalInputs{
-	// 		// PastUserInputs: []string{
-	// 		// 	"Which movie is the best ?",
-	// 		// 	"Can you explain why ?",
-	// 		// },
-	// 		// GeneratedResponses: []string{
-	// 		// 	"It's Die Hard for sure.",
-	// 		// 	"It's the best movie ever.",
-	// 		// },
-	// 		Text: text,
-	// 	},
-	// 	Model: "google/gemma-2-2b-it",
-	// })
-
-	res, err := ic.Text2TextGeneration(context.Background(), &huggingface.Text2TextGenerationRequest{
-		Inputs: text,
-		Model:  "facebook/blenderbot-400M-distill",
-		Parameters: huggingface.Text2TextGenerationParameters{
-			// Prevent the model from generating very long responses
-			// MaxNewTokens: huggingface.PTR(100),
-			// Add some randomness to responses
-			Temperature: huggingface.PTR(0.7),
-		},
-	})
-
-	if err != nil {
-		return "", err
+	if llm_adapter == nil {
+		return "", fmt.Errorf("LLM adapter not initialized")
 	}
 
-	return res[0].GeneratedText, nil
+	return llm_adapter.GenerateText(context.Background(), text)
 }
 
 func handleMessage(message *tgbotapi.Message) {
@@ -183,13 +210,92 @@ func handleMessage(message *tgbotapi.Message) {
 		}
 	} else if len(photo) > 0 {
 		log.Println("Handling photo message")
-		// msg := tgbotapi.NewMessage(message.Chat.ID, "Success")
-		// msg.ReplyToMessageID = message.MessageID
-		// _, err = bot.Send(msg)
 
-		// if err != nil {
-		// 	log.Printf("An error occured: %s", err.Error())
-		// }
+		// Get the highest resolution photo
+		photoSize := photo[len(photo)-1]
+
+		file, err := bot.GetFile(tgbotapi.FileConfig{FileID: photoSize.FileID})
+		if err != nil {
+			log.Printf("Failed to get file: %s", err.Error())
+			msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry, I couldn't process the image. Please try again.")
+			msg.ReplyToMessageID = message.MessageID
+			bot.Send(msg)
+			return
+		}
+
+		fileURL := file.Link(telegram_api_key)
+		re := regexp.MustCompile(`\.([a-zA-Z0-9]+)(?:\?|$)`)
+
+		matches := re.FindStringSubmatch(fileURL)
+
+		if len(matches) > 1 {
+			fileExt := matches[1]
+			if fileExt != "jpg" {
+				log.Printf("Unsupported file extension: %s", fileExt)
+				msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry, I couldn't handle the provided file. Please provide an image.")
+				msg.ReplyToMessageID = message.MessageID
+				bot.Send(msg)
+				return
+			}
+		} else {
+			log.Printf("Could not detect file extension from URL: %s", fileURL)
+			msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry, I couldn't handle the provided file. Please provide an image.")
+			msg.ReplyToMessageID = message.MessageID
+			bot.Send(msg)
+			return
+		}
+
+		log.Printf("Downloading image from: %s", fileURL)
+		resp, err := http.Get(fileURL)
+		if err != nil {
+			log.Printf("Failed to download image: %s", err.Error())
+			msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry, I couldn't download the image. Please try again.")
+			msg.ReplyToMessageID = message.MessageID
+			bot.Send(msg)
+			return
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("Failed to download image. HTTP %s\nBody: %s", resp.Status, resp.Body)
+			msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry, I couldn't download the image. Please try again.")
+			msg.ReplyToMessageID = message.MessageID
+			bot.Send(msg)
+			return
+		}
+		defer resp.Body.Close()
+
+		// Read image data
+		imageData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("Failed to read image data: %s", err.Error())
+			msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry, I couldn't read the image data. Please try again.")
+			msg.ReplyToMessageID = message.MessageID
+			bot.Send(msg)
+			return
+		}
+
+		log.Printf("Image data: %d bytes", len(imageData))
+
+		// Process the image with the LLM
+		prompt := "read this supermarket receipt and return the list of items in it"
+		// Mime type is extracted from telegram file URL
+		llmResponse, err := llm_adapter.GenerateTextWithImage(context.Background(), prompt, imageData, "image/jpeg")
+		if err != nil {
+			log.Printf("Failed to process image with LLM: %s", err.Error())
+			msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry, I couldn't process the image. Please try again.")
+			msg.ReplyToMessageID = message.MessageID
+			bot.Send(msg)
+			return
+		}
+
+		// Send the LLM response
+		msg := tgbotapi.NewMessage(message.Chat.ID, llmResponse)
+		msg.ReplyToMessageID = message.MessageID
+		_, err = bot.Send(msg)
+
+		if err != nil {
+			log.Printf("Failed to send message: %s", err.Error())
+		}
 	} else {
 		log.Println("Unexpected message type, message rejected")
 		msg := tgbotapi.NewMessage(message.Chat.ID, "Unexpected message type, message rejected")
