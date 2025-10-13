@@ -2,8 +2,7 @@ package adapters
 
 import "context"
 
-// LLMAdapter defines the interface for different LLM providers
-type LLMAdapter interface {
+type LlmAdapter interface {
 	// GenerateText generates a text response based on the input text
 	GenerateText(ctx context.Context, input string) (string, error)
 
@@ -11,10 +10,12 @@ type LLMAdapter interface {
 	GenerateTextWithImage(ctx context.Context, input string, imageData []byte, mimeType string) (string, error)
 }
 
-// AdapterType represents the type of LLM adapter
-type AdapterType string
+type LlmAdapterType string
 
-const (
-	HuggingFace  AdapterType = "huggingface"
-	GoogleStudio AdapterType = "google_studio"
-)
+var LLM = struct {
+	HuggingFace  LlmAdapterType
+	GoogleStudio LlmAdapterType
+}{
+	HuggingFace:  "huggingface",
+	GoogleStudio: "google_studio",
+}

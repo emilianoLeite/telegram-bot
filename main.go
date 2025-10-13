@@ -1,38 +1,34 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"regexp"
 	"strings"
+	"syscall"
 
 	"github.com/emilianoleite/telegram-bot/adapters"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 var (
-	bot                   *tgbotapi.BotAPI
-	telegram_api_key      string
-	huggingface_token     string
-	google_studio_api_key string
-	llm_adapter           adapters.LLMAdapter
-	adapter_type          adapters.AdapterType
+	telegramAPIKey string
 )
 
-func initializeLLMAdapter(adapterType adapters.AdapterType, model string) (adapters.LLMAdapter, error) {
+func initializeLlmAdapter(adapterType adapters.LlmAdapterType, model string) (adapters.LlmAdapter, error) {
 	var apiKey string
-	var env_var_exists bool
+	var envVarExists bool
 
 	switch adapterType {
-	case adapters.HuggingFace:
-		apiKey, env_var_exists = os.LookupEnv("HUGGINGFACEHUB_API_TOKEN")
+	case adapters.LLM.HuggingFace:
+		apiKey, envVarExists = os.LookupEnv("HUGGINGFACEHUB_API_TOKEN")
 
-		if apiKey == "" || !env_var_exists {
+		if apiKey == "" || !envVarExists {
 			log.Panic("Missing or invalid HUGGINGFACEHUB_API_TOKEN")
 		}
 
@@ -41,10 +37,10 @@ func initializeLLMAdapter(adapterType adapters.AdapterType, model string) (adapt
 		}
 
 		log.Printf("Initializing Hugging Face adapter with model: %s", model)
-	case adapters.GoogleStudio:
-		apiKey, env_var_exists = os.LookupEnv("GOOGLE_STUDIO_API_KEY")
+	case adapters.LLM.GoogleStudio:
+		apiKey, envVarExists = os.LookupEnv("GOOGLE_STUDIO_API_KEY")
 
-		if apiKey == "" || !env_var_exists {
+		if apiKey == "" || !envVarExists {
 			log.Panic("Missing or invalid GOOGLE_STUDIO_API_KEY")
 		}
 
@@ -56,45 +52,38 @@ func initializeLLMAdapter(adapterType adapters.AdapterType, model string) (adapt
 		return nil, fmt.Errorf("unsupported adapter type: %s", adapterType)
 	}
 
-	return adapters.NewLLMAdapter(adapterType, apiKey, model)
+	return adapters.NewLlmAdapter(adapterType, apiKey, model)
 }
 
 func main() {
 	var err error
-	var env_var_exists bool
+	var envVarExists bool
 
-	telegram_api_key, env_var_exists = os.LookupEnv("TELEGRAM_BOT_API_KEY")
+	telegramAPIKey, envVarExists := os.LookupEnv("TELEGRAM_BOT_API_KEY")
 
-	if telegram_api_key == "" || !env_var_exists {
+	if telegramAPIKey == "" || !envVarExists {
 		log.Panic("Missing or invalid TELEGRAM_BOT_API_KEY")
 	}
 
-	google_studio_api_key, env_var_exists = os.LookupEnv("GOOGLE_STUDIO_API_KEY")
+	llmAdapterType, envVarExists := os.LookupEnv("LLM_ADAPTER_TYPE")
+	var adapterType adapters.LlmAdapterType
 
-	if google_studio_api_key == "" || !env_var_exists {
-		log.Panic("Missing or invalid GOOGLE_STUDIO_API_KEY")
-	}
-
-	// Get adapter type from environment variable, default to huggingface
-	adapter_type_str, env_var_exists := os.LookupEnv("LLM_ADAPTER_TYPE")
-
-	if !env_var_exists || adapter_type_str == "" {
-		adapter_type = adapters.HuggingFace
+	if !envVarExists || llmAdapterType == "" {
+		adapterType = adapters.LLM.HuggingFace
 		log.Println("LLM_ADAPTER_TYPE not set, defaulting to huggingface")
 	} else {
-		adapter_type = adapters.AdapterType(adapter_type_str)
+		adapterType = adapters.LlmAdapterType(llmAdapterType)
 	}
 
-	llm_adapter, err = initializeLLMAdapter(adapter_type, "")
+	llmAdapter, err := initializeLlmAdapter(adapterType, "")
 
 	if err != nil {
 		log.Panicf("Failed to initialize LLM adapter: %v", err)
 	}
 
-	bot, err = tgbotapi.NewBotAPI(telegram_api_key)
+	bot, err := tgbotapi.NewBotAPI(telegramAPIKey)
 
 	if err != nil {
-		// Abort if something is wrong
 		log.Panic(err)
 	}
 
@@ -104,46 +93,50 @@ func main() {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 
-	// Create a new cancellable background context. Calling `cancel()` leads to the cancellation of the context
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	// `updates` is a golang channel which receives telegram updates
-	updates := bot.GetUpdatesChan(u)
+	updatesChan := bot.GetUpdatesChan(u)
 
-	// Pass cancellable context to goroutine
-	go receiveUpdates(ctx, updates)
+	go receiveUpdates(ctx, bot, llmAdapter, updatesChan)
 
-	// Tell the user the bot is online
-	log.Println("Start listening for updates. Press enter to stop")
+	log.Println("Bot is now running. Press Ctrl+C to stop.")
 
-	// Wait for a newline symbol, then cancel handling updates
-	bufio.NewReader(os.Stdin).ReadBytes('\n')
-	cancel()
+	// Set up channel to listen for interrupt signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan,
+		os.Interrupt,    // Ctrl+C
+		syscall.SIGTERM, // kill
+		syscall.SIGQUIT, // Ctrl+\
+	)
+
+	sig := <-sigChan
+	log.Printf("Received %v signal, shutting down...", sig)
 }
 
-func receiveUpdates(ctx context.Context, updates tgbotapi.UpdatesChannel) {
-	// `for {` means the loop is infinite until we manually stop it
+func receiveUpdates(
+	ctx context.Context, bot *tgbotapi.BotAPI, llmAdapter adapters.LlmAdapter, updates tgbotapi.UpdatesChannel,
+) {
 	for {
 		select {
-		// stop looping if ctx is cancelled
 		case <-ctx.Done():
 			return
-		// receive update from channel and then handle it
 		case update := <-updates:
-			handleUpdate(update)
+			handleUpdate(ctx, bot, llmAdapter, update)
 		}
 	}
 }
 
-func handleUpdate(update tgbotapi.Update) {
+func handleUpdate(
+	ctx context.Context, bot *tgbotapi.BotAPI, llmAdapter adapters.LlmAdapter, update tgbotapi.Update,
+) {
 	switch {
 	case update.Message != nil:
-		handleMessage(update.Message)
+		handleMessage(ctx, bot, llmAdapter, update.Message)
 	}
 }
 
-// When we get a command, we react accordingly
 func handleCommand(_chatId int64, command string) error {
 	var err error
 
@@ -155,15 +148,9 @@ func handleCommand(_chatId int64, command string) error {
 	return err
 }
 
-func handleWithLLM(text string) (string, error) {
-	if llm_adapter == nil {
-		return "", fmt.Errorf("LLM adapter not initialized")
-	}
-
-	return llm_adapter.GenerateText(context.Background(), text)
-}
-
-func handleMessage(message *tgbotapi.Message) {
+func handleMessage(
+	ctx context.Context, bot *tgbotapi.BotAPI, llmAdapter adapters.LlmAdapter, message *tgbotapi.Message,
+) {
 	user := message.From
 	text := message.Text
 	photo := message.Photo
@@ -175,15 +162,14 @@ func handleMessage(message *tgbotapi.Message) {
 	}
 
 	if text != "" {
-		// Print to console
 		log.Printf("Received message: %+v", text)
 
 		if strings.HasPrefix(text, "/") {
 			err = handleCommand(message.Chat.ID, text)
 		} else {
-			llm_response, err := handleWithLLM(text)
+			llmResponse, err := llmAdapter.GenerateText(ctx, text)
 			if err != nil {
-				log.Printf("[HuggingFace] Unexpected error: %s\n", err.Error())
+				log.Printf("[LLM] Unexpected error: %s\n", err.Error())
 
 				msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry I could not handle your message, please try again later")
 				msg.ReplyToMessageID = message.MessageID
@@ -195,7 +181,7 @@ func handleMessage(message *tgbotapi.Message) {
 				}
 			}
 
-			msg := tgbotapi.NewMessage(message.Chat.ID, llm_response)
+			msg := tgbotapi.NewMessage(message.Chat.ID, llmResponse)
 			msg.ReplyToMessageID = message.MessageID
 			_, err = bot.Send(msg)
 
@@ -223,10 +209,9 @@ func handleMessage(message *tgbotapi.Message) {
 			return
 		}
 
-		fileURL := file.Link(telegram_api_key)
-		re := regexp.MustCompile(`\.([a-zA-Z0-9]+)(?:\?|$)`)
-
-		matches := re.FindStringSubmatch(fileURL)
+		fileURL := file.Link(telegramAPIKey) // TODO: refactor bot into custom class so we don't need to have telegramAPIKey as a global variable
+		fileExtensionRegex := regexp.MustCompile(`\.([a-zA-Z0-9]+)(?:\?|$)`)
+		matches := fileExtensionRegex.FindStringSubmatch(fileURL)
 
 		if len(matches) > 1 {
 			fileExt := matches[1]
@@ -264,7 +249,6 @@ func handleMessage(message *tgbotapi.Message) {
 		}
 		defer resp.Body.Close()
 
-		// Read image data
 		imageData, err := io.ReadAll(resp.Body)
 		if err != nil {
 			log.Printf("Failed to read image data: %s", err.Error())
@@ -276,10 +260,9 @@ func handleMessage(message *tgbotapi.Message) {
 
 		log.Printf("Image data: %d bytes", len(imageData))
 
-		// Process the image with the LLM
 		prompt := "read this supermarket receipt and return the list of items in it"
 		// Mime type is extracted from telegram file URL
-		llmResponse, err := llm_adapter.GenerateTextWithImage(context.Background(), prompt, imageData, "image/jpeg")
+		_llmResponse, err := llmAdapter.GenerateTextWithImage(ctx, prompt, imageData, "image/jpeg")
 		if err != nil {
 			log.Printf("Failed to process image with LLM: %s", err.Error())
 			msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry, I couldn't process the image. Please try again.")
@@ -288,14 +271,54 @@ func handleMessage(message *tgbotapi.Message) {
 			return
 		}
 
-		// Send the LLM response
-		msg := tgbotapi.NewMessage(message.Chat.ID, llmResponse)
-		msg.ReplyToMessageID = message.MessageID
-		_, err = bot.Send(msg)
+		// TODO: properly review all this 👇
 
-		if err != nil {
-			log.Printf("Failed to send message: %s", err.Error())
-		}
+		// outputTypeStr := os.Getenv("OUTPUT_TYPE")
+		// if outputTypeStr == "" {
+		// 	outputTypeStr = string(adapters.Output.File)
+		// }
+		// outputType := adapters.OutputAdapterType(outputTypeStr)
+
+		// var outputConfig adapters.OutputAdapterConfig
+		// switch outputType {
+		// case adapters.Output.GoogleSheets:
+		// 	credentialsJSON, _ := os.ReadFile("credentials.json")
+		// 	outputConfig = adapters.OutputAdapterConfig{
+		// 		CredentialsJSON: string(credentialsJSON),
+		// 		SpreadsheetID:   os.Getenv("GOOGLE_SHEET_ID"),
+		// 		SheetRange:      "Receipts!A:A",
+		// 	}
+		// case adapters.Output.File:
+		// 	outputConfig = adapters.OutputAdapterConfig{
+		// 		OutputPath: os.Getenv("OUTPUT_PATH"),
+		// 	}
+		// case adapters.Output.Telegram:
+		// 	outputConfig = adapters.OutputAdapterConfig{
+		// 		Bot:          bot,
+		// 		ChatID:       message.Chat.ID,
+		// 		ReplyToMsgID: message.MessageID,
+		// 	}
+		// }
+
+		// outputAdapter, err := adapters.NewOutputAdapter(outputType, outputConfig)
+		// if err != nil {
+		// 	log.Printf("Failed to create output adapter: %s", err.Error())
+		// 	msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry, I couldn't save the receipt. Please try again.")
+		// 	msg.ReplyToMessageID = message.MessageID
+		// 	bot.Send(msg)
+		// 	return
+		// }
+
+		// err = outputAdapter.WriteReceipt(ctx, llmResponse)
+		// if err != nil {
+		// 	log.Printf("Failed to write receipt: %s", err.Error())
+		// 	msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry, I couldn't save the receipt. Please try again.")
+		// 	msg.ReplyToMessageID = message.MessageID
+		// 	bot.Send(msg)
+		// 	return
+		// }
+
+		// log.Printf("Receipt processed and written via %s adapter", outputType)
 	} else {
 		log.Println("Unexpected message type, message rejected")
 		msg := tgbotapi.NewMessage(message.Chat.ID, "Unexpected message type, message rejected")

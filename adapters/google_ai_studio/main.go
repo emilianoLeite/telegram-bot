@@ -7,14 +7,12 @@ import (
 	"google.golang.org/genai"
 )
 
-// GoogleStudioAdapter implements the LLMAdapter interface for Google AI Studio
 type GoogleStudioAdapter struct {
 	client *genai.Client
 	model  string
 	config *genai.GenerateContentConfig
 }
 
-// NewGoogleStudioAdapter creates a new Google AI Studio adapter
 func NewGoogleStudioAdapter(apiKey string, model string) (*GoogleStudioAdapter, error) {
 	ctx := context.Background()
 	clientConfig := &genai.ClientConfig{
@@ -31,6 +29,7 @@ func NewGoogleStudioAdapter(apiKey string, model string) (*GoogleStudioAdapter, 
 	}
 
 	thinking_budget := int32(0) // Disables thinking
+	// TODO: add values for temperature and other configs. Check the docs.
 	config := &genai.GenerateContentConfig{
 		ThinkingConfig: &genai.ThinkingConfig{
 			ThinkingBudget: &thinking_budget,
@@ -43,7 +42,6 @@ func NewGoogleStudioAdapter(apiKey string, model string) (*GoogleStudioAdapter, 
 	}, nil
 }
 
-// GenerateText generates a text response based on the input text
 func (g *GoogleStudioAdapter) GenerateText(ctx context.Context, input string) (string, error) {
 	parts := []*genai.Part{
 		genai.NewPartFromText(input),
