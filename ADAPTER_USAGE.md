@@ -1,68 +1,74 @@
-# LLM Adapter Usage
+# Adapter Usage Guide
 
-This Telegram bot now supports multiple LLM providers through an adapter pattern. You can choose between Hugging Face and Google AI Studio.
+This Telegram bot uses an adapter pattern to support multiple providers for both LLM processing and output destinations. This allows you to easily switch between different services without changing the core bot logic.
+
+## Adapters Overview
+
+### 1. LLM Adapters
+Choose your AI provider for processing text and images (receipts).
+
+### 2. Output Adapters
+Choose where to send the processed receipt data.
 
 ## Environment Variables
 
-Set the following environment variables:
+- Check the [README.md](README.md) for a list of all required and optional env vars.
 
-### Required for all adapters:
-- `TELEGRAM_BOT_API_KEY`: Your Telegram bot API key
-- `HUGGINGFACEHUB_API_TOKEN`: Your Hugging Face API token
-- `GOOGLE_STUDIO_API_KEY`: Your Google AI Studio API key
 
-### Adapter Selection:
-- `LLM_ADAPTER_TYPE`: Choose between `huggingface` or `google_studio` (defaults to `huggingface` if not set)
-
-## Usage Examples
-
-### Using Hugging Face (default):
-```bash
-export TELEGRAM_BOT_API_KEY="your_telegram_key"
-export HUGGINGFACEHUB_API_TOKEN="your_huggingface_token"
-export GOOGLE_STUDIO_API_KEY="your_google_key"
-# LLM_ADAPTER_TYPE defaults to huggingface
-./telegram-bot
-```
-
-### Using Google AI Studio:
-```bash
-export TELEGRAM_BOT_API_KEY="your_telegram_key"
-export HUGGINGFACEHUB_API_TOKEN="your_huggingface_token"
-export GOOGLE_STUDIO_API_KEY="your_google_key"
-export LLM_ADAPTER_TYPE="google_studio"
-./telegram-bot
-```
-
-## Adapter Features
+## LLM Adapter Features
 
 ### Hugging Face Adapter
 - Uses `facebook/blenderbot-400M-distill` model by default
 - Supports text generation
 - Image processing is not fully implemented (placeholder)
 
-### Google AI Studio Adapter
+### Google AI Studio Adapter (Recommended for Receipt Processing)
 - Uses `gemini-2.5-flash` model by default
 - Supports text generation
 - Supports image processing (multimodal)
 
-## Architecture
+## Output Adapter Features
 
-The adapter pattern allows you to easily switch between different LLM providers without changing the main bot logic. Each adapter implements the `LLMAdapter` interface:
+### Telegram Output Adapter (Default)
+- Sends processed receipt data back to the user as a Telegram message
+- Reply-to-message format for easy conversation tracking
+- No additional configuration needed
 
-```go
-type LLMAdapter interface {
-    GenerateText(ctx context.Context, input string) (string, error)
-    GenerateTextWithImage(ctx context.Context, input string, imageData []byte, mimeType string) (string, error)
-}
-```
+### Google Sheets Output Adapter
+- Appends receipt data to a Google Spreadsheet
+- Requires service account credentials (`credentials.json`)
+- Configurable sheet range (default: `Receipts!A:A`)
+- Useful for tracking expenses over time
+
+### File Output Adapter
+- Saves receipt data to local text files
+- Creates timestamped files (e.g., `receipt_2025-10-13_15-30-45.txt`)
+- Useful for local archiving and processing
+
+
+## Receipt Processing Flow
+
+1. User sends a photo to the Telegram bot
+2. Bot downloads the image from Telegram servers
+3. image/jpeg MIME type is validated
+4. **LLM Adapter** processes the image
+5. **Output Adapter** writes the parsed receipt data to the configured destination
+6. User receives confirmation or the processed data
 
 ## Adding New Adapters
 
-To add a new LLM provider:
+### Adding a New LLM Provider:
 
 1. Create a new package in the `adapters/` directory
-2. Implement the `LLMAdapter` interface
-3. Add the new adapter type to the `AdapterType` enum
-4. Update the factory function to handle the new adapter type
-5. Update the initialization logic in `main.go`
+2. Implement the `LlmAdapter` interface
+3. Add the new adapter type to the `LlmAdapterType` enum in `llm_adapter.go`
+4. Update the `NewLlmAdapter` factory function in `factory.go`
+5. Update initialization logic in `main.go`
+
+### Adding a New Output Destination:
+
+1. Create a new file in the `adapters/` directory (e.g., `database_output.go`)
+2. Implement the `OutputAdapter` interface
+3. Add the new output type to the `OutputType` enum in `output_adapter.go`
+4. Update the `NewOutputAdapter` factory function in `factory.go`
+5. Add configuration handling in `main.go`

@@ -262,7 +262,7 @@ func handleMessage(
 
 		prompt := "read this supermarket receipt and return the list of items in it"
 		// Mime type is extracted from telegram file URL
-		_llmResponse, err := llmAdapter.GenerateTextWithImage(ctx, prompt, imageData, "image/jpeg")
+		llmResponse, err := llmAdapter.GenerateTextWithImage(ctx, prompt, imageData, "image/jpeg")
 		if err != nil {
 			log.Printf("Failed to process image with LLM: %s", err.Error())
 			msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry, I couldn't process the image. Please try again.")
@@ -273,52 +273,52 @@ func handleMessage(
 
 		// TODO: properly review all this 👇
 
-		// outputTypeStr := os.Getenv("OUTPUT_TYPE")
-		// if outputTypeStr == "" {
-		// 	outputTypeStr = string(adapters.Output.File)
-		// }
-		// outputType := adapters.OutputAdapterType(outputTypeStr)
+		outputTypeStr := os.Getenv("OUTPUT_TYPE")
+		if outputTypeStr == "" {
+			outputTypeStr = string(adapters.Output.File)
+		}
+		outputType := adapters.OutputAdapterType(outputTypeStr)
 
-		// var outputConfig adapters.OutputAdapterConfig
-		// switch outputType {
-		// case adapters.Output.GoogleSheets:
-		// 	credentialsJSON, _ := os.ReadFile("credentials.json")
-		// 	outputConfig = adapters.OutputAdapterConfig{
-		// 		CredentialsJSON: string(credentialsJSON),
-		// 		SpreadsheetID:   os.Getenv("GOOGLE_SHEET_ID"),
-		// 		SheetRange:      "Receipts!A:A",
-		// 	}
-		// case adapters.Output.File:
-		// 	outputConfig = adapters.OutputAdapterConfig{
-		// 		OutputPath: os.Getenv("OUTPUT_PATH"),
-		// 	}
-		// case adapters.Output.Telegram:
-		// 	outputConfig = adapters.OutputAdapterConfig{
-		// 		Bot:          bot,
-		// 		ChatID:       message.Chat.ID,
-		// 		ReplyToMsgID: message.MessageID,
-		// 	}
-		// }
+		var outputConfig adapters.OutputAdapterConfig
+		switch outputType {
+		case adapters.Output.GoogleSheets:
+			credentialsJSON, _ := os.ReadFile("credentials.json")
+			outputConfig = adapters.OutputAdapterConfig{
+				CredentialsJSON: string(credentialsJSON),
+				SpreadsheetID:   os.Getenv("GOOGLE_SHEET_ID"),
+				SheetRange:      "Receipts!A:A",
+			}
+		case adapters.Output.File:
+			outputConfig = adapters.OutputAdapterConfig{
+				OutputPath: os.Getenv("OUTPUT_PATH"),
+			}
+		case adapters.Output.Telegram:
+			outputConfig = adapters.OutputAdapterConfig{
+				Bot:          bot,
+				ChatID:       message.Chat.ID,
+				ReplyToMsgID: message.MessageID,
+			}
+		}
 
-		// outputAdapter, err := adapters.NewOutputAdapter(outputType, outputConfig)
-		// if err != nil {
-		// 	log.Printf("Failed to create output adapter: %s", err.Error())
-		// 	msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry, I couldn't save the receipt. Please try again.")
-		// 	msg.ReplyToMessageID = message.MessageID
-		// 	bot.Send(msg)
-		// 	return
-		// }
+		outputAdapter, err := adapters.NewOutputAdapter(outputType, outputConfig)
+		if err != nil {
+			log.Printf("Failed to create output adapter: %s", err.Error())
+			msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry, I couldn't save the receipt. Please try again.")
+			msg.ReplyToMessageID = message.MessageID
+			bot.Send(msg)
+			return
+		}
 
-		// err = outputAdapter.WriteReceipt(ctx, llmResponse)
-		// if err != nil {
-		// 	log.Printf("Failed to write receipt: %s", err.Error())
-		// 	msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry, I couldn't save the receipt. Please try again.")
-		// 	msg.ReplyToMessageID = message.MessageID
-		// 	bot.Send(msg)
-		// 	return
-		// }
+		err = outputAdapter.WriteReceipt(ctx, llmResponse)
+		if err != nil {
+			log.Printf("Failed to write receipt: %s", err.Error())
+			msg := tgbotapi.NewMessage(message.Chat.ID, "Sorry, I couldn't save the receipt. Please try again.")
+			msg.ReplyToMessageID = message.MessageID
+			bot.Send(msg)
+			return
+		}
 
-		// log.Printf("Receipt processed and written via %s adapter", outputType)
+		log.Printf("Receipt processed and written via %s adapter", outputType)
 	} else {
 		log.Println("Unexpected message type, message rejected")
 		msg := tgbotapi.NewMessage(message.Chat.ID, "Unexpected message type, message rejected")
